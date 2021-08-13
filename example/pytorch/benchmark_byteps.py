@@ -54,6 +54,9 @@ parser.add_argument("--partition", type=int, default=None, help="partition size"
 parser.add_argument(
     "--synchronize", action="store_true", default=False, help="disables synchronize"
 )
+parser.add_argument(
+    "--throughput", action="store_true", default=False, help="disables throughput"
+)
 
 
 args = parser.parse_args()
@@ -70,7 +73,9 @@ cudnn.benchmark = True
 if args.model == "speech":
     from torchaudio import models
 
-    model = models.DeepSpeech(128)
+    model = models.DeepSpeech(256)
+elif args.model == "transformer":
+    model = torch.nn.Transformer(batch_first=True)
 else:
     from torchvision import models
 
@@ -99,13 +104,19 @@ bps.broadcast_optimizer_state(optimizer, root_rank=0)
 datasets = []
 for _ in range(100):
     if args.model == "speech":
-        data = torch.rand(args.batch_size, 128, 128)
+        data = (torch.rand(args.batch_size, 300, 256),)
         target = torch.LongTensor(args.batch_size, 40).random_() % 40
+    elif args.model == "transformer":
+        data = (
+            torch.rand(args.batch_size, 100, 512),
+            torch.rand(args.batch_size, 100, 512),
+        )
+        target = torch.LongTensor(args.batch_size, 512).random_() % 100
     else:
-        data = torch.rand(args.batch_size, 3, 224, 224)
+        data = (torch.rand(args.batch_size, 3, 224, 224),)
         target = torch.LongTensor(args.batch_size).random_() % 1000
     if args.cuda:
-        data, target = data.cuda(), target.cuda()
+        data, target = tuple(x.cuda() for x in data), target.cuda()
     datasets.append(data)
 data_index = 0
 
@@ -116,7 +127,8 @@ def benchmark_step():
     data = datasets[data_index % len(datasets)]
     data_index += 1
     optimizer.zero_grad()
-    output = model(data)
+    output = model(*data)
+    # Todo: loss functions for speech and language models
     loss = F.cross_entropy(output, target)
     loss.backward()
     optimizer.step()
@@ -143,13 +155,9 @@ timeit.timeit(benchmark_step, number=args.num_warmup_batches)
 # Benchmark
 log("Running benchmark...")
 img_secs = []
-enable_profiling = args.profiler & (bps.rank() == 0)
 
-with profile(
-    activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]
-    if enable_profiling
-    else None
-) as prof:
+
+def bench_all():
     for x in range(args.num_iters):
         if args.synchronize:
             synchronize()
@@ -157,12 +165,18 @@ with profile(
         img_sec = args.batch_size * args.num_batches_per_iter / time
         log("Iter #%d: %.1f img/sec per %s" % (x, img_sec, device))
         img_secs.append(img_sec)
-if enable_profiling:
+
+
+if args.profiler & (bps.rank() == 0):
+    with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
+        bench_all()
     prof.export_chrome_trace(
         "trace_{}_{}x{}x{}.json".format(
             args.model, args.batch_size, args.num_batches_per_iter, args.num_iters
         )
     )
+else:
+    bench_all()
 
 # Results
 img_sec_mean = np.mean(img_secs)
@@ -173,11 +187,11 @@ log(
     % (bps.size(), device, bps.size() * img_sec_mean, bps.size() * img_sec_conf)
 )
 
-if bps.rank() == 0:
+if args.throughput & (bps.rank() == 0):
     import xlsxwriter
 
     with xlsxwriter.Workbook(
-        "throughput_{}_{}x{}x{}.json".format(
+        "throughput_{}_{}x{}x{}.xlsx".format(
             args.model, args.batch_size, args.num_batches_per_iter, args.num_iters
         )
     ) as workbook:
