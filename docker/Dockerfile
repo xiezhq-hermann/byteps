@@ -38,7 +38,9 @@ RUN apt-get install -y --allow-downgrades --allow-change-held-packages --no-inst
 # note: for tf <= 1.14, you need gcc-4.9
 ARG FRAMEWORK=tensorflow
 RUN if [ "$FRAMEWORK" = "pytorch" ]; then \
-    pip3 install -U numpy xlsxwriter torchvision==0.10.0+cu111 torch==1.9.0+cu111 torchaudio===0.9.0 -f https://download.pytorch.org/whl/torch_stable.html; \
+    # for YOLOV3
+    pip3 install -U numpy xlsxwriter\
+    torchvision==0.10.0+cu111 torch==1.9.0+cu111 torchaudio===0.9.0 -f https://download.pytorch.org/whl/torch_stable.html; \
     # elif [ "$FRAMEWORK" = "tensorflow" ]; then \
     #     pip3 install --upgrade pip; \
     #     pip3 install -U tensorflow-gpu==1.15.0; \

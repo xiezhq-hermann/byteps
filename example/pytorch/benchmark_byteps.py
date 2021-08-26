@@ -76,6 +76,9 @@ if args.model == "speech":
     model = models.DeepSpeech(256)
 elif args.model == "transformer":
     model = torch.nn.Transformer(batch_first=True)
+elif args.model == "yolov3":
+    from yolov3_model.yolov3 import Yolov3
+    model = Yolov3()
 else:
     from torchvision import models
 
@@ -112,11 +115,20 @@ for _ in range(100):
             torch.rand(args.batch_size, 100, 512),
         )
         target = torch.LongTensor(args.batch_size, 512).random_() % 100
+    elif args.model == "yolov3":
+        data = (torch.rand(args.batch_size, 3, 448, 448),)
+        label_sbbox = torch.rand(args.batch_size, 56, 56, 3, 26)
+        label_mbbox = torch.rand(args.batch_size, 28, 28, 3, 26)
+        label_lbbox = torch.rand(args.batch_size, 14, 14, 3, 26)
+        sbboxes = torch.rand(args.batch_size, 150, 4)
+        mbboxes = torch.rand(args.batch_size, 150, 4)
+        lbboxes = torch.rand(args.batch_size, 150, 4)
+        target = (label_sbbox, label_mbbox, label_lbbox, sbboxes, mbboxes, lbboxes)
     else:
         data = (torch.rand(args.batch_size, 3, 224, 224),)
         target = torch.LongTensor(args.batch_size).random_() % 1000
     if args.cuda:
-        data, target = tuple(x.cuda() for x in data), target.cuda()
+        data, target = tuple(x.cuda() for x in data), tuple(x.cuda() for x in target) if isinstance(target, tuple) else target.cuda()
     datasets.append(data)
 data_index = 0
 
@@ -128,8 +140,16 @@ def benchmark_step():
     data_index += 1
     optimizer.zero_grad()
     output = model(*data)
-    # Todo: loss functions for speech and language models
-    loss = F.cross_entropy(output, target)
+
+    if args.model == "yolov3":
+        from yolov3_model.loss.yolo_loss import YoloV3Loss
+        from yolov3_model.yolov3 import MODEL
+        p, p_d = output
+        loss, loss_xywh, loss_conf, loss_cls = YoloV3Loss(MODEL["ANCHORS"], MODEL["STRIDES"])(p, p_d, *target)
+    else:
+        # Todo: loss functions for speech and language models
+        loss = F.cross_entropy(output, target)
+        
     loss.backward()
     optimizer.step()
     if args.synchronize:
